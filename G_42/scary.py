@@ -41,3 +41,28 @@ def weight_init(m):
         mid = m.weight.size(2) // 2
         gain = nn.init.calculate_gain('relu')
         nn.init.orthogonal_(m.weight.data[:, :, mid, mid], gain)
+
+class Actor(nn.Module):
+    """MLP actor network."""
+    def __init__(
+        self, obs_shape, action_shape, hidden_dim, encoder_type,
+        encoder_feature_dim, log_std_min, log_std_max, num_layers, num_filters
+    ):
+        super().__init__()
+
+        self.encoder = make_encoder(
+            encoder_type, obs_shape, encoder_feature_dim, num_layers,
+            num_filters, output_logits=True
+        )
+
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+
+        self.trunk = nn.Sequential(
+            nn.Linear(self.encoder.feature_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, 2 * action_shape[0])
+        )
+
+        self.outputs = dict()
+        self.apply(weight_init)
