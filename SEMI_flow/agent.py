@@ -122,3 +122,27 @@ class Agent():
       self.target_net.reset_noise()  # Sample new target net noise
       pns = self.target_net.forward_with_latent(next_states)  # Probabilities p(s_t+n, ·; θtarget)
       pns_a = pns[range(self.batch_size), argmax_indices_ns]  # Double-Q probabilities p(s_t+n, argmax_a[(z, p(s_t+n, a; θonline))]; θtarget)
+      # use ns instead of self.n since n is possibly different for each sequence in the batch
+      ns = torch.tensor(ns, device=latent_mem.device).unsqueeze(1)
+      # Compute Tz (Bellman operator T applied to z)
+      Tz = returns.unsqueeze(1) + nonterminals * (self.discount ** ns) * self.support.unsqueeze(0)  # Tz = R^n + (γ^n)z (accounting for terminal states)
+      Tz = Tz.clamp(min=self.Vmin, max=self.Vmax)  # Clamp between supported values
+      # Compute L2 projection of Tz onto fixed support z
+      b = (Tz - self.Vmin) / self.delta_z  # b = (Tz - Vmin) / Δz
+      l, u = b.floor().to(torch.int64), b.ceil().to(torch.int64)
+      # Fix disappearing probability mass when l = b = u (b is int)
+      l[(u > 0) * (l == u)] -= 1
+      u[(l < (self.atoms - 1)) * (l == u)] += 1
+
+      # Distribute probability of Tz
+      m = states.new_zeros(self.batch_size, self.atoms)
+      offset = torch.linspace(0, ((self.batch_size - 1) * self.atoms), self.batch_size).unsqueeze(1).expand(self.batch_size, self.atoms).to(actions)
+      m.view(-1).index_add_(0, (l + offset).view(-1), (pns_a * (u.float() - b)).view(-1))  # m_l = m_l + p(s_t+n, a*)(u - b)
+      m.view(-1).index_add_(0, (u + offset).view(-1), (pns_a * (b - l.float())).view(-1))  # m_u = m_u + p(s_t+n, a*)(b - l)
+
+    loss = -torch.sum(m * log_ps_a, 1)  # Cross-entropy loss (minimises DKL(m||p(s_t, a_t)))
+    self.online_net.zero_grad()
+    loss.mean().backward()  # Backpropagate importance-weighted minibatch loss
+    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    # self.optimiser.step()
+    self.linear_optimiser.step()
