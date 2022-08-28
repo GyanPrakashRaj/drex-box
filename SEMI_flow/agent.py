@@ -106,3 +106,19 @@ class Agent():
     if not freeze:
       self.convs_optimiser.step()
     self.linear_optimiser.step()
+
+  def learn_with_latent(self, latent_mem):
+    # Sample transitions
+    idxs, states, actions, returns, next_states, nonterminals, weights, ns = latent_mem.sample(self.batch_size)
+
+    # Calculate current state probabilities (online network noise already sampled)
+    log_ps = self.online_net.forward_with_latent(states, log=True)  # Log probabilities log p(s_t, ·; θonline)
+    log_ps_a = log_ps[range(self.batch_size), actions]  # log p(s_t, a_t; θonline)
+    with torch.no_grad():
+      # Calculate nth next state probabilities
+      pns = self.online_net.forward_with_latent(next_states)  # Probabilities p(s_t+n, ·; θonline)
+      dns = self.support.expand_as(pns) * pns  # Distribution ds_t+n = (z, p(s_t+n, ·; θonline))
+      argmax_indices_ns = dns.sum(2).argmax(1)  # Perform argmax action selection using online network: argmax_a[(z, p(s_t+n, a; θonline))]
+      self.target_net.reset_noise()  # Sample new target net noise
+      pns = self.target_net.forward_with_latent(next_states)  # Probabilities p(s_t+n, ·; θtarget)
+      pns_a = pns[range(self.batch_size), argmax_indices_ns]  # Double-Q probabilities p(s_t+n, argmax_a[(z, p(s_t+n, a; θonline))]; θtarget)
