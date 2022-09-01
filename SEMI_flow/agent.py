@@ -146,3 +146,21 @@ class Agent():
     clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
     # self.optimiser.step()
     self.linear_optimiser.step()
+
+  def update_target_net(self):
+    self.target_net.load_state_dict(self.online_net.state_dict())
+
+  # Save model parameters on current device (don't move model between devices)
+  def save(self, path, name='model.pth'):
+    torch.save(self.online_net.state_dict(), os.path.join(path, name))
+
+  # Evaluates Q-value based on single state (no batch)
+  def evaluate_q(self, state):
+    with torch.no_grad():
+      return (self.online_net(state.unsqueeze(0)) * self.support).sum(2).max(1)[0].item()
+
+  def train(self):
+    self.online_net.train()
+
+  def eval(self):
+    self.online_net.eval()
